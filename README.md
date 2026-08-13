@@ -141,6 +141,33 @@ sensitivity monotonicity, CAGR/ratios, accounting validation, rules triggering (
 growth), and API round-trips (upload→lock→interview→calculate→report) on a seeded
 in-memory database.
 
+## Live demo & GitHub Pages deployment
+
+**Live static preview:** https://rahulguptaca.github.io/AICA-L2-B77-Ghaziabad-Capstone_Project/
+
+Every push to `main` triggers `.github/workflows/deploy-pages.yml`, which builds the
+frontend and deploys it to GitHub Pages (repo **Settings → Pages → Source: GitHub
+Actions** — the workflow enables this automatically on first run).
+
+Because GitHub Pages only serves static files (it cannot run the Python backend), the
+Pages build ships in **static demo mode**:
+
+- All screens render from `frontend/src/demo/data.json` — a snapshot of the real
+  backend's responses for the seeded demo, regenerated with
+  `backend/scripts/snapshot_demo.py` against a running, freshly-seeded backend.
+- The **Simulation Lab stays fully interactive** through a display-only TypeScript
+  mirror of the valuation engine (`frontend/src/demo/simulate.ts`), verified to
+  reproduce the Python engine's outputs exactly. The authoritative engine remains
+  the Python one.
+- "Export as PDF" serves the bundled, engine-generated sample report.
+- Uploads, AI verification, the adaptive interview and live report generation
+  need the backend — the banner on the site links back to this README.
+
+To turn the Pages site into a fully live deployment later: host the backend
+(Render/Railway/Fly.io), set the repository **Actions variable** `VITE_API_URL` to its
+URL, add the Pages origin to the backend CORS list, and re-run the workflow — the
+build then skips static mode and talks to the real API.
+
 ## Docker (optional)
 
 ```bash

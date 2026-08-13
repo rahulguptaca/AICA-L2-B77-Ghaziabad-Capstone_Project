@@ -114,7 +114,7 @@ export default function AppLayout() {
       {/* Sidebar */}
       <aside className="w-[232px] shrink-0 bg-surface border-r border-line flex flex-col fixed inset-y-0 left-0 z-20">
         <div className="flex items-center gap-2.5 px-5 pt-5 pb-4">
-          <img src="/logo.svg" alt="CompanyVal AI" className="h-9 w-9" />
+          <img src={`${import.meta.env.BASE_URL}logo.svg`} alt="CompanyVal AI" className="h-9 w-9" />
           <div>
             <p className="text-[15px] font-extrabold text-primary leading-tight">CompanyVal AI</p>
             <p className="text-[10.5px] text-slate3 font-medium">AI-Powered Valuation</p>
@@ -159,7 +159,7 @@ export default function AppLayout() {
               <b>Static preview</b> — a GitHub Pages snapshot of the seeded demo, computed by the real
               engine. Simulation Lab is fully interactive; document upload, AI verification, the adaptive
               interview and report generation run in the full app —{" "}
-              <a className="underline font-semibold" href="https://github.com/aicountly/AICA-L2-B77-Ghaziabad-Capstone_Project#readme"
+              <a className="underline font-semibold" href="https://github.com/rahulguptaca/AICA-L2-B77-Ghaziabad-Capstone_Project#readme"
                 target="_blank" rel="noreferrer">run it locally from the repo</a>.
             </span>
           </div>
