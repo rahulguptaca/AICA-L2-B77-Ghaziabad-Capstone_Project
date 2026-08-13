@@ -8,7 +8,7 @@ import {
   Building2, ChevronDown, Sparkles, ShieldCheck, BarChart3, GitBranch,
   FileSpreadsheet, Check,
 } from "lucide-react";
-import { api } from "../services/api";
+import { api, IS_STATIC_DEMO } from "../services/api";
 import { useCase } from "../hooks/useCase";
 import { ProgressRing } from "../components/ui";
 import type { CaseSummary } from "../types";
@@ -152,6 +152,18 @@ export default function AppLayout() {
 
       {/* Main */}
       <div className="flex-1 ml-[232px] flex flex-col min-h-screen">
+        {IS_STATIC_DEMO && (
+          <div className="bg-primary-50 border-b border-primary-100/70 px-8 py-2 text-[12.5px] text-primary-700 flex items-center gap-2">
+            <Sparkles size={13} className="shrink-0" />
+            <span>
+              <b>Static preview</b> — a GitHub Pages snapshot of the seeded demo, computed by the real
+              engine. Simulation Lab is fully interactive; document upload, AI verification, the adaptive
+              interview and report generation run in the full app —{" "}
+              <a className="underline font-semibold" href="https://github.com/aicountly/AICA-L2-B77-Ghaziabad-Capstone_Project#readme"
+                target="_blank" rel="noreferrer">run it locally from the repo</a>.
+            </span>
+          </div>
+        )}
         <header className="flex items-start justify-between gap-4 px-8 pt-6 pb-4">
           <div>
             <h1 className="text-[26px] font-extrabold text-navy leading-tight">{meta.title}</h1>

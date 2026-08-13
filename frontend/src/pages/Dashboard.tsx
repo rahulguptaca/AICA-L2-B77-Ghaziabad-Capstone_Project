@@ -9,7 +9,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, Cell, LabelList, Area, AreaChart,
 } from "recharts";
-import { api, fmtCr, fmtCrPlain, fmtDate, fmtPct } from "../services/api";
+import { api, fmtCr, fmtCrPlain, fmtDate, fmtPct, reportDownloadUrl } from "../services/api";
 import { useCase } from "../hooks/useCase";
 import { CardTitle, ProgressRing, Spinner, StatusChip } from "../components/ui";
 import type { CaseSummary, DashboardData, Insight, RunSummary } from "../types";
@@ -71,7 +71,7 @@ export default function Dashboard() {
         `/api/valuations/${activeCaseId}/reports`,
         { template: "comprehensive", options: { ai_narrative: true } },
       );
-      window.open(`/api/reports/${rep.id}/download?format=${rep.has_pdf ? "pdf" : "html"}`, "_blank");
+      window.open(reportDownloadUrl(rep.id, rep.has_pdf), "_blank");
     },
   });
 

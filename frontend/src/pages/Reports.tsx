@@ -4,7 +4,7 @@ import {
   FileText, FileSpreadsheet, FileCode2, Landmark, Settings2, Check,
   Download, Link2, ArrowRight, Loader2,
 } from "lucide-react";
-import { api, fmtCr, fmtCrPlain, fmtDate } from "../services/api";
+import { api, fmtCr, fmtCrPlain, fmtDate, reportDownloadUrl } from "../services/api";
 import { useCase } from "../hooks/useCase";
 import { CardTitle, Spinner, Toggle } from "../components/ui";
 import type { Readiness, ReportInfo, RunSummary } from "../types";
@@ -52,7 +52,7 @@ export default function Reports() {
           ai_narrative: execMode === "ai",
         },
       });
-      window.open(`/api/reports/${rep.id}/download?format=${format === "pdf" && rep.has_pdf ? "pdf" : "html"}`, "_blank");
+      window.open(reportDownloadUrl(rep.id, format === "pdf" && rep.has_pdf), "_blank");
       return rep;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["reports", activeCaseId] }),
@@ -268,7 +268,7 @@ export default function Reports() {
             <button className="btn-ghost-blue text-xs" disabled={!reports.length}
               onClick={() => {
                 const latest = reports[0];
-                const url = `${location.origin}/api/reports/${latest.id}/download?format=${latest.has_pdf ? "pdf" : "html"}`;
+                const url = new URL(reportDownloadUrl(latest.id, latest.has_pdf), location.origin).href;
                 navigator.clipboard.writeText(url);
                 setShareMsg("Link copied to clipboard");
                 setTimeout(() => setShareMsg(""), 2500);
@@ -295,7 +295,7 @@ export default function Reports() {
                     <p className="text-[11px] text-slate3">{fmtDate(r.created_at, true)} · {r.template}</p>
                   </div>
                   <a className="text-xs font-semibold text-primary hover:underline"
-                    href={`/api/reports/${r.id}/download?format=${r.has_pdf ? "pdf" : "html"}`} target="_blank" rel="noreferrer">
+                    href={reportDownloadUrl(r.id, r.has_pdf)} target="_blank" rel="noreferrer">
                     Download
                   </a>
                 </li>

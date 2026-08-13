@@ -8,6 +8,7 @@ dist/
 storage/uploads/*
 storage/rendered_pages/*
 storage/reports/*
+storage/.master_key
 !storage/uploads/.gitkeep
 !storage/rendered_pages/.gitkeep
 !storage/reports/.gitkeep
