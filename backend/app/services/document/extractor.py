@@ -120,8 +120,15 @@ _LINE_RE = re.compile(
 
 
 def extract_pdf_items(path: str | Path, extraction: PdfExtraction | None = None) -> PdfExtraction:
-    """Extract candidate line items from statement pages using text lines +
-    two-column heuristics (current year, prior year)."""
+    """Extract candidate line items from statement pages.
+
+    Primary strategy: PyMuPDF's table detector (`page.find_tables()`), which
+    reconstructs rows/columns from cell geometry — needed because many
+    generated PDFs place each table cell as its own text object, so the
+    naive "one physical text line per row" regex below never sees a label
+    and its values on the same line (each ends up alone on its own line).
+    Falls back to the line-based regex heuristic for pages with no
+    detectable table (e.g. loosely formatted statements)."""
     ext = extraction or inspect_pdf(path)
     doc = fitz.open(str(path))
 
@@ -138,48 +145,115 @@ def extract_pdf_items(path: str | Path, extraction: PdfExtraction | None = None)
         if not p.is_candidate:
             continue
         page = doc[p.page_number - 1]
-        text = page.get_text("text")
 
-        # find period labels in page header (first ~15 lines)
-        head_lines = text.splitlines()[:15]
-        period_labels: list[str] = []
-        for line in head_lines:
-            for token in re.split(r"\s{2,}|\t", line):
-                lbl = normalise_period_label(token)
-                if lbl and lbl not in period_labels:
-                    period_labels.append(lbl)
-        # statements list current year first
-        if len(period_labels) >= 2:
-            period_labels = period_labels[:2]
-        for lbl in period_labels:
+        table_items = _extract_table_items(page, p, ext)
+        if table_items:
+            ext.items.extend(table_items)
+            continue
+
+        _extract_line_items_regex(page, p, ext)
+    doc.close()
+    return ext
+
+
+def _extract_table_items(page, p: PageInfo, ext: PdfExtraction) -> list[ExtractedItem]:
+    """Reconstruct rows via PyMuPDF's geometry-based table detector."""
+    items: list[ExtractedItem] = []
+    try:
+        tables = page.find_tables()
+    except Exception:
+        return items
+
+    for table in tables.tables:
+        rows = table.extract()
+        if len(rows) < 2:
+            continue
+        header = rows[0]
+        col_periods: dict[int, str] = {}
+        for idx, cell in enumerate(header):
+            if not cell:
+                continue
+            lbl = normalise_period_label(str(cell))
+            if lbl:
+                col_periods[idx] = lbl
+        if not col_periods:
+            continue  # no recognisable period columns — not a financial table
+
+        for lbl in col_periods.values():
             if lbl not in ext.period_labels:
                 ext.period_labels.append(lbl)
 
-        for raw_line in text.splitlines():
-            line = raw_line.rstrip()
-            m = _LINE_RE.match(line.strip())
-            if not m:
+        for row in rows[1:]:
+            if not row:
                 continue
-            label = m.group("label").strip().rstrip(".").strip()
+            label_cell = next((c for c in row if c and re.search(r"[A-Za-z]", str(c))), None)
+            if label_cell is None:
+                continue
+            label = re.sub(r"\s+", " ", str(label_cell).strip()).rstrip(".").strip()
             if len(label) < 3 or label.lower().startswith(("note", "particular", "as at", "year ended")):
                 continue
             metric = map_label_to_metric(label)
-            values = [m.group("v1"), m.group("v2")]
-            for col, raw_val in enumerate(values):
+            for col_idx, period in col_periods.items():
+                if col_idx >= len(row) or row[col_idx] is label_cell:
+                    continue
+                raw_val = row[col_idx]
                 if raw_val is None:
                     continue
                 value = parse_amount(raw_val, default_unit_multiplier=ext.unit_multiplier)
                 if value is None:
                     continue
-                period = (period_labels[col] if col < len(period_labels)
-                          else (period_labels[0] if period_labels else ""))
-                ext.items.append(ExtractedItem(
-                    label=label, metric=metric, period_label=period or "",
-                    raw_value=raw_val, value=value,
+                items.append(ExtractedItem(
+                    label=label, metric=metric, period_label=period,
+                    raw_value=str(raw_val), value=value,
                     page_number=p.page_number, statement_type=p.statement_type,
+                    method="pymupdf_table",
                 ))
-    doc.close()
-    return ext
+    return items
+
+
+def _extract_line_items_regex(page, p: PageInfo, ext: PdfExtraction) -> None:
+    """Fallback for pages with no detectable table: single-physical-line
+    heuristic (label and value(s) whitespace-separated on one text line)."""
+    text = page.get_text("text")
+
+    # find period labels in page header (first ~15 lines)
+    head_lines = text.splitlines()[:15]
+    period_labels: list[str] = []
+    for line in head_lines:
+        for token in re.split(r"\s{2,}|\t", line):
+            lbl = normalise_period_label(token)
+            if lbl and lbl not in period_labels:
+                period_labels.append(lbl)
+    # statements list current year first
+    if len(period_labels) >= 2:
+        period_labels = period_labels[:2]
+    for lbl in period_labels:
+        if lbl not in ext.period_labels:
+            ext.period_labels.append(lbl)
+
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip()
+        m = _LINE_RE.match(line.strip())
+        if not m:
+            continue
+        label = m.group("label").strip().rstrip(".").strip()
+        if len(label) < 3 or label.lower().startswith(("note", "particular", "as at", "year ended")):
+            continue
+        metric = map_label_to_metric(label)
+        values = [m.group("v1"), m.group("v2")]
+        for col, raw_val in enumerate(values):
+            if raw_val is None:
+                continue
+            value = parse_amount(raw_val, default_unit_multiplier=ext.unit_multiplier)
+            if value is None:
+                continue
+            period = (period_labels[col] if col < len(period_labels)
+                      else (period_labels[0] if period_labels else ""))
+            ext.items.append(ExtractedItem(
+                label=label, metric=metric, period_label=period or "",
+                raw_value=raw_val, value=value,
+                page_number=p.page_number, statement_type=p.statement_type,
+            ))
 
 
 def render_pages(path: str | Path, page_numbers: list[int], out_dir: str | Path,
