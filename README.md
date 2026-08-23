@@ -34,6 +34,41 @@ FastAPI + SQLAlchemy (SQLite dev / PostgreSQL)   ←  workflow, audit, persisten
 The browser **never** calls Gemini. The API key is entered in Settings, validated
 server-side, encrypted (Fernet + `COMPANYVAL_MASTER_KEY`) and never returned again.
 
+## Quick reference
+
+Day-to-day commands once the backend venv and frontend `node_modules` already exist (see
+**Backend setup** / **Frontend setup** below for the first-time walkthrough). Run from the
+repo root.
+
+**Run the app** (two terminals):
+
+```bash
+cd backend && .venv/bin/python -m uvicorn app.main:app --port 8000 --reload
+cd frontend && npm run dev        # prints the URL — normally http://localhost:5173
+```
+
+**Reset all data to the fresh seeded state:**
+
+```bash
+cd backend && rm -f ../storage/companyval.db && .venv/bin/python -m app.seed
+```
+
+**Set up on a new machine:**
+
+```bash
+git clone https://github.com/rahulguptaca/AICA-L2-B77-Ghaziabad-Capstone_Project.git
+cd AICA-L2-B77-Ghaziabad-Capstone_Project
+cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt \
+  && .venv/bin/python -m app.seed
+cd ../frontend && npm install
+```
+
+**Free a stuck port** (swap in whichever port is stuck — 8000 backend, 5173 frontend):
+
+```bash
+lsof -ti :8000 -ti :5173 | xargs kill
+```
+
 ## Prerequisites
 
 - Python 3.12+ (tested on 3.14)
@@ -68,6 +103,9 @@ in local dev a key is auto-generated at `storage/.master_key`), `UPLOAD_DIR`, `R
 ```bash
 python -m app.seed        # creates tables + seeds the ABC Food Pvt. Ltd. demo journey
 ```
+
+To wipe everything and reseed fresh, delete `storage/companyval.db` and re-run the command
+above (see **Quick reference** for the one-liner).
 
 Tables are auto-created on startup for development. For managed migrations, Alembic is
 wired to the app metadata:
