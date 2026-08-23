@@ -5,7 +5,7 @@ import {
   Lock, Unlock, ArrowRight, Trash2, FileSpreadsheet, ScanSearch, Eye,
   ShieldCheck, Download, Clock,
 } from "lucide-react";
-import { api, fmtCrPlain, fmtFileSize } from "../services/api";
+import { api, fiscalYearFromFilename, fmtCrPlain, fmtFileSize } from "../services/api";
 import { useCase } from "../hooks/useCase";
 import { CardTitle, EmptyState, Spinner, StatusChip } from "../components/ui";
 import type { DocumentInfo, FinancialsData, LineItem } from "../types";
@@ -68,8 +68,7 @@ export default function Financials() {
       setUploadError("");
       setProcessing(true);
       for (const file of files) {
-        const fyMatch = file.name.match(/20\d{2}[-_ ]?(\d{2})/);
-        const fy = fyMatch ? `FY${fyMatch[0].slice(0, 4)}-${fyMatch[1]}` : "";
+        const fy = fiscalYearFromFilename(file.name);
         const form = new FormData();
         form.append("file", file);
         form.append("fiscal_year_label", fy);
@@ -117,6 +116,9 @@ export default function Financials() {
   if (isLoading || !data) return <Spinner label="Loading financials…" />;
 
   const failedDocs = data.documents.filter((d) => d.status === "failed");
+  // Items that will be auto-adopted at lock time without anyone having looked at them.
+  const unapprovedCount = allItems.filter(
+    (i) => i.approved_value === null && i.verification_status !== "verified").length;
   // Values are always Python-extracted; AI vision only cross-checks them, and is off
   // by default. Say which one produced these numbers instead of implying low quality.
   const aiVerificationRan = data.extraction_counts.verifications > 0;
@@ -340,9 +342,20 @@ export default function Financials() {
                     <Unlock size={13} /> Unlock
                   </button>
                 ) : (
-                  <button className="btn-primary !py-1.5 !px-3 text-xs" onClick={() => lock.mutate(false)}
+                  <button className="btn-primary !py-1.5 !px-3 text-xs"
+                    onClick={() => {
+                      // Locking adopts every un-approved python_value as approved. Say so
+                      // when nothing was actually verified, rather than implying otherwise.
+                      if (unapprovedCount > 0 && !window.confirm(
+                        `${unapprovedCount} value(s) have not been individually reviewed.\n\n` +
+                        "Locking adopts the Python-extracted number for each of them as the " +
+                        "approved value. Continue?")) return;
+                      lock.mutate(false);
+                    }}
                     disabled={!allItems.length || needsReview.some((i) => i.approved_value === null)}>
-                    <Lock size={13} /> Lock Verified Financials
+                    <Lock size={13} /> {unapprovedCount > 0
+                      ? `Lock Financials (${unapprovedCount} unreviewed)`
+                      : "Lock Verified Financials"}
                   </button>
                 )}
               </span>
@@ -470,16 +483,18 @@ export default function Financials() {
                         <p className="text-[11px] text-slate3 flex items-center gap-1"><ScanSearch size={12} /> Python Extracted</p>
                         <p className="text-base font-extrabold text-navy mt-1">₹{fmtCrPlain(it.python_value)} Cr</p>
                         <button className="btn-secondary w-full mt-2 !py-1.5 text-xs"
-                          onClick={() => approve.mutate({ item_id: it.id, approved_value: it.python_value ?? 0, note: "Adopted Python-extracted value" })}>
-                          Use this value
+                          disabled={it.python_value === null}
+                          onClick={() => it.python_value !== null && approve.mutate({ item_id: it.id, approved_value: it.python_value, note: "Adopted Python-extracted value" })}>
+                          {it.python_value === null ? "No value" : "Use this value"}
                         </button>
                       </div>
                       <div className="rounded-lg bg-surface border border-line p-3">
                         <p className="text-[11px] text-slate3 flex items-center gap-1"><Eye size={12} /> AI Verified (p.{it.source_page})</p>
                         <p className="text-base font-extrabold text-navy mt-1">₹{fmtCrPlain(it.ai_visual_value)} Cr</p>
                         <button className="btn-secondary w-full mt-2 !py-1.5 text-xs"
-                          onClick={() => approve.mutate({ item_id: it.id, approved_value: it.ai_visual_value ?? 0, note: "Adopted AI-verified value" })}>
-                          Use this value
+                          disabled={it.ai_visual_value === null}
+                          onClick={() => it.ai_visual_value !== null && approve.mutate({ item_id: it.id, approved_value: it.ai_visual_value, note: "Adopted AI-verified value" })}>
+                          {it.ai_visual_value === null ? "Not readable" : "Use this value"}
                         </button>
                       </div>
                       <div className="rounded-lg bg-surface border border-line p-3">

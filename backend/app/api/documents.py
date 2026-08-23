@@ -17,7 +17,7 @@ from ..models import (
     ValuationCase, VerificationResult,
 )
 from ..schemas import ApproveValueRequest
-from ..services.document.extractor import sha256_of
+from ..services.document.extractor import normalise_period_label, sha256_of
 from ..services.document.pipeline import process_document
 from ..services.financial.canonical import METRIC_LABELS
 from ..services.financial.store import load_financial_data
@@ -66,11 +66,15 @@ async def upload_document(case_id: str, file: UploadFile = File(...),
     dest.write_bytes(content)
 
     safe_name = re.sub(r"[^\w.\- ()]", "_", file.filename or "upload")[:290]
+    # The label is a client-side guess from the filename. Accept it only if it
+    # normalises to a real fiscal year — an invalid one ("FY2024-20") would become
+    # an extra phantom period sitting alongside the periods read off the statement.
+    fy_label = normalise_period_label(fiscal_year_label) or "" if fiscal_year_label else ""
     doc = Document(
         id=doc_id, case_id=case.id, original_filename=safe_name,
         stored_filename=stored, mime_type=file.content_type or "application/octet-stream",
         size_bytes=len(content), sha256=sha256_of(dest),
-        fiscal_year_label=fiscal_year_label, status="uploaded",
+        fiscal_year_label=fy_label, status="uploaded",
     )
     db.add(doc)
     db.add(AuditLog(case_id=case.id, action="document_uploaded",

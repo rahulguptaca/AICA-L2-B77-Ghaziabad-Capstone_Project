@@ -20,7 +20,10 @@ from ..financial.numbers import parse_amount, detect_unit_multiplier
 RENDER_DPI = 200
 
 _PERIOD_RE = re.compile(
-    r"(?:FY\s?)?(20\d{2})\s?[-–—/]\s?(\d{2}|20\d{2})|march\s+(20\d{2})|31\.03\.(20\d{2})",
+    # 20\d{2} must precede \d{2} in the alternation: Python alternation is ordered,
+    # so the two-digit branch would match "20" of "2024" and turn 2023-2024 into
+    # FY2023-20. The trailing (?!\d) stops "20240331" parsing as 2024-03.
+    r"(?:FY\s?)?(20\d{2})\s?[-–—/]\s?(20\d{2}|\d{2})(?!\d)|march\s+(20\d{2})|31\.03\.(20\d{2})",
     re.IGNORECASE,
 )
 
@@ -72,8 +75,12 @@ def normalise_period_label(text: str) -> str | None:
         return None
     if m.group(1):
         start = int(m.group(1))
-        end = m.group(2)
-        end2 = int(end) % 100
+        end2 = int(m.group(2)) % 100
+        # A fiscal year spans consecutive years. Rejecting anything else keeps a
+        # bad guess ("FY2024-20", a date fragment) from becoming a phantom period
+        # sitting alongside the periods actually read off the statement.
+        if end2 != (start + 1) % 100:
+            return None
         return f"FY{start}-{end2:02d}"
     year = int(m.group(3) or m.group(4))
     return f"FY{year - 1}-{year % 100:02d}"

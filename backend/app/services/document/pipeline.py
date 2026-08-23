@@ -21,11 +21,32 @@ from ...models import (
 from ..ai.provider import AIProviderError
 from ..ai.service import get_provider, logged_call, get_ai_config
 from ..financial.canonical import STATEMENT_OF
-from .extractor import PdfExtraction, extract_pdf_items, extract_xlsx_items, inspect_pdf, render_pages
+from ..financial.numbers import parse_amount
+from .extractor import (
+    PdfExtraction, extract_pdf_items, extract_xlsx_items, inspect_pdf,
+    normalise_period_label, render_pages,
+)
 
 log = logging.getLogger(__name__)
 
 MATCH_TOLERANCE = 0.005  # 0.5% → formatting-equivalent match
+
+
+def _as_float(value: Any) -> float | None:
+    """Coerce a model-supplied value for a Float column, or None.
+
+    Handles the shapes a model actually emits — a number, a formatted string
+    ("1,23,456"), a word ("high"), a nested object — none of which may reach
+    SQLAlchemy untyped, because the resulting error escapes AIProviderError
+    handling and fails the whole document.
+    """
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        return parse_amount(value)
+    return None
 
 
 def _set_status(db: Session, doc: Document, status: str, error: str = "") -> None:
@@ -152,9 +173,13 @@ def _upsert_line_items(db: Session, doc: Document, ext: PdfExtraction) -> int:
             FinancialLineItem.metric == it.metric,
         )).scalars().first()
         if row is None:
+            # Set the defaults explicitly: the confidence guard below only fires on
+            # verification_status == "unverified", and a row created without it left
+            # confidence at 0, which the UI averaged into a misleading headline figure.
             row = FinancialLineItem(
                 case_id=doc.case_id, period_label=period,
                 statement=STATEMENT_OF.get(it.metric, "pnl"), metric=it.metric,
+                verification_status="unverified", confidence=0.0,
             )
             db.add(row)
             created += 1
@@ -220,14 +245,19 @@ def _run_visual_verification(db: Session, doc: Document, ext: PdfExtraction,
             if not isinstance(item, dict):
                 continue
             metric = item.get("metric", "")
+            # Every value below comes from the model and is bound straight into typed
+            # columns. A formatted number ("1,23,456") or a word ("high") used to raise
+            # out of the loop and fail the document, discarding good extraction.
             db.add(VerificationResult(
                 case_id=doc.case_id, document_id=doc.id, page_number=page_no,
-                metric=metric, period_label=str(item.get("period", "")),
+                metric=metric,
+                period_label=normalise_period_label(str(item.get("period", "")))
+                or str(item.get("period", ""))[:40],
                 label_seen=str(item.get("label_seen", ""))[:300],
-                python_value=item.get("python_value"),
-                visual_value=item.get("visual_value"),
-                status=item.get("status", "not_visible"),
-                confidence=float(item.get("confidence", 0) or 0),
+                python_value=_as_float(item.get("python_value")),
+                visual_value=_as_float(item.get("visual_value")),
+                status=str(item.get("status", "not_visible"))[:40],
+                confidence=_as_float(item.get("confidence")) or 0.0,
                 raw_response=item,
             ))
             if item.get("status") == "verified":
@@ -244,17 +274,29 @@ def reconcile_document(db: Session, doc: Document) -> dict[str, Any]:
     )).scalars().all()
     verifs = db.execute(select(VerificationResult).where(
         VerificationResult.document_id == doc.id)).scalars().all()
-    v_by_metric: dict[str, VerificationResult] = {}
+    # Key on (metric, period): a statement carries the current year *and* its
+    # comparative, so keying on metric alone let one year's verified number be
+    # applied to the other year's line item and flagged as a discrepancy.
+    v_by_key: dict[tuple[str, str], VerificationResult] = {}
     for v in verifs:
-        cur = v_by_metric.get(v.metric)
+        key = (v.metric, normalise_period_label(v.period_label or "") or v.period_label or "")
+        cur = v_by_key.get(key)
         if cur is None or v.confidence > cur.confidence:
-            v_by_metric[v.metric] = v
+            v_by_key[key] = v
 
     counts = {"verified": 0, "needs_review": 0, "low_confidence": 0, "unverified": 0}
     for it in items:
-        v = v_by_metric.get(it.metric)
+        v = v_by_key.get((it.metric, it.period_label))
         if v is None:
+            # No verification for this row. Never discard a decision a human already
+            # made: an approved or reviewed row keeps its status, otherwise this
+            # would silently erase the needs_review gate on reprocessing.
+            if it.approved_value is not None or it.review_note:
+                counts[it.verification_status if it.verification_status in counts
+                       else "unverified"] += 1
+                continue
             it.verification_status = "unverified"
+            it.ai_visual_value = None
             counts["unverified"] += 1
             continue
         it.ai_visual_value = v.visual_value

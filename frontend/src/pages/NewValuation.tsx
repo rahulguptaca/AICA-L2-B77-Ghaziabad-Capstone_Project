@@ -10,7 +10,7 @@ import {
   Scale, ClipboardCheck, Lightbulb, UploadCloud, FileText, CheckCircle2,
   AlertTriangle, Loader2,
 } from "lucide-react";
-import { api, fmtFileSize } from "../services/api";
+import { api, fiscalYearFromFilename, fmtFileSize } from "../services/api";
 import { useCase } from "../hooks/useCase";
 import { ProgressRing } from "../components/ui";
 import type { CaseSummary, DocumentInfo } from "../types";
@@ -93,8 +93,7 @@ export default function NewValuation() {
       const failures: string[] = [];
       // per-file try/catch: one bad file must not discard the others already uploaded
       for (const file of files) {
-        const fyMatch = file.name.match(/20\d{2}[-_ ]?(\d{2})/);
-        const fy = fyMatch ? `FY${fyMatch[0].slice(0, 4)}-${fyMatch[1]}` : "";
+        const fy = fiscalYearFromFilename(file.name);
         const form = new FormData();
         form.append("file", file);
         form.append("fiscal_year_label", fy);
