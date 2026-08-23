@@ -199,7 +199,7 @@ def _extract_table_items(page, p: PageInfo, ext: PdfExtraction) -> list[Extracte
             label = re.sub(r"\s+", " ", str(label_cell).strip()).rstrip(".").strip()
             if len(label) < 3 or label.lower().startswith(("note", "particular", "as at", "year ended")):
                 continue
-            metric = map_label_to_metric(label)
+            metric = map_label_to_metric(label, p.statement_type)
             for col_idx, period in col_periods.items():
                 if col_idx >= len(row) or row[col_idx] is label_cell:
                     continue
@@ -246,7 +246,7 @@ def _extract_line_items_regex(page, p: PageInfo, ext: PdfExtraction) -> None:
         label = m.group("label").strip().rstrip(".").strip()
         if len(label) < 3 or label.lower().startswith(("note", "particular", "as at", "year ended")):
             continue
-        metric = map_label_to_metric(label)
+        metric = map_label_to_metric(label, p.statement_type)
         values = [m.group("v1"), m.group("v2")]
         for col, raw_val in enumerate(values):
             if raw_val is None:
@@ -327,7 +327,7 @@ def extract_xlsx_items(path: str | Path) -> PdfExtraction:
             if label_cell is None:
                 continue
             label = label_cell.value.strip()
-            metric = map_label_to_metric(label)
+            metric = map_label_to_metric(label, stype)
             for cell in row:
                 if cell is label_cell or cell.value is None:
                     continue
