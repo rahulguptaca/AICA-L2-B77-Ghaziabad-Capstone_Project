@@ -5,7 +5,7 @@ import {
   Lock, Unlock, ArrowRight, Trash2, FileSpreadsheet, ScanSearch, Eye,
   ShieldCheck, Download, Clock,
 } from "lucide-react";
-import { api, fmtCrPlain, fmtDate } from "../services/api";
+import { api, fmtCrPlain, fmtFileSize } from "../services/api";
 import { useCase } from "../hooks/useCase";
 import { CardTitle, EmptyState, Spinner, StatusChip } from "../components/ui";
 import type { DocumentInfo, FinancialsData, LineItem } from "../types";
@@ -21,7 +21,7 @@ const PIPELINE_STEPS = [
   { key: "awaiting_review", label: "Verification & Review", sub: "Review discrepancies and confirm data" },
 ];
 
-function stepState(docs: DocumentInfo[], stepKey: string): "done" | "active" | "pending" {
+function stepState(docs: DocumentInfo[], stepKey: string): "done" | "active" | "waiting" | "pending" {
   if (!docs.length) return "pending";
   const order = ["uploaded", "reading", "extracting", "rendering", "ai_verifying",
     "reconciling", "awaiting_review", "verified", "locked"];
@@ -31,7 +31,9 @@ function stepState(docs: DocumentInfo[], stepKey: string): "done" | "active" | "
   }));
   const stepIdx = { uploaded: 0, extracting: 2, reconciling: 5, awaiting_review: 6 }[stepKey] ?? 0;
   if (minIdx > stepIdx) return "done";
-  if (minIdx === stepIdx || (stepKey === "extracting" && minIdx >= 1 && minIdx <= 4)) return "active";
+  // awaiting_review is a hand-off to the user, not background work — never spin here
+  if (minIdx === stepIdx) return stepKey === "awaiting_review" ? "waiting" : "active";
+  if (stepKey === "extracting" && minIdx >= 1 && minIdx <= 4) return "active";
   return "pending";
 }
 
@@ -56,10 +58,10 @@ export default function Financials() {
   };
 
   const upload = useMutation({
-    mutationFn: async (files: FileList) => {
+    mutationFn: async (files: File[]) => {
       setUploadError("");
       setProcessing(true);
-      for (const file of Array.from(files)) {
+      for (const file of files) {
         const fyMatch = file.name.match(/20\d{2}[-_ ]?(\d{2})/);
         const fy = fyMatch ? `FY${fyMatch[0].slice(0, 4)}-${fyMatch[1]}` : "";
         const form = new FormData();
@@ -151,7 +153,12 @@ export default function Financials() {
             <p className="text-xs text-slate3 mt-1">PDF, XLSX, XLS up to 25MB each</p>
           </button>
           <input ref={fileRef} type="file" multiple accept=".pdf,.xlsx,.xls" className="hidden"
-            onChange={(e) => e.target.files?.length && upload.mutate(e.target.files)} />
+            onChange={(e) => {
+              const picked = Array.from(e.target.files ?? []);
+              // reset first (snapshot above) so re-picking the same filename still fires onChange
+              e.target.value = "";
+              if (picked.length) upload.mutate(picked);
+            }} />
           {uploadError && <p className="mt-2 text-xs text-risk-text">{uploadError}</p>}
 
           <div className="grid grid-cols-3 gap-2.5 mt-4">
@@ -165,7 +172,7 @@ export default function Financials() {
                 </div>
                 <p className="text-[11px] font-bold text-navy mt-1.5 truncate">{d.fiscal_year_label || d.original_filename}</p>
                 <p className="text-[10px] text-slate3 truncate">{d.original_filename}</p>
-                <p className="text-[10px] text-slate3">{(d.size_bytes / 1048576).toFixed(1)} MB</p>
+                <p className="text-[10px] text-slate3">{fmtFileSize(d.size_bytes)}</p>
               </div>
             ))}
           </div>
@@ -196,11 +203,14 @@ export default function Financials() {
                   <span className="mt-0.5">
                     {st === "done" ? <CheckCircle2 size={18} className="text-mint" />
                       : st === "active" ? <Loader2 size={18} className="text-primary animate-spin" />
+                      : st === "waiting" ? <AlertTriangle size={18} className="text-warn" />
                       : <Circle size={18} className="text-line" />}
                   </span>
                   <div>
                     <p className={`text-[13px] font-semibold ${st === "pending" ? "text-slate3" : "text-navy"}`}>{s.label}</p>
-                    <p className="text-[11px] text-slate3">{s.sub}</p>
+                    <p className="text-[11px] text-slate3">
+                      {st === "waiting" ? "Ready for you — review below, then lock" : s.sub}
+                    </p>
                   </div>
                 </li>
               );
@@ -208,7 +218,11 @@ export default function Financials() {
           </ol>
           <div className="mt-4 rounded-lg bg-primary-50/60 border border-primary-100/50 px-3 py-2 text-[11.5px] text-primary-700 flex items-center gap-2">
             <Clock size={13} />
-            {data.locked ? "Financials verified and locked" : processing ? "Estimated time remaining: 1 – 2 minutes" : "Upload documents to begin extraction"}
+            {data.locked ? "Financials verified and locked"
+              : processing ? "Estimated time remaining: 1 – 2 minutes"
+              : !data.documents.length ? "Upload documents to begin extraction"
+              : c.needs_review ? `${c.needs_review} item(s) need your review below`
+              : "Extraction complete — review and lock the financials"}
           </div>
         </div>
 
