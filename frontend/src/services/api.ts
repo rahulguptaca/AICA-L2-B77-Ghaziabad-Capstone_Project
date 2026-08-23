@@ -93,6 +93,32 @@ export function fmtIndian(v: number | null | undefined): string {
   return v.toLocaleString("en-IN");
 }
 
+/** Guess an Indian fiscal-year label from a filename, or "" when unsure.
+ *
+ *  Only returns a label for a genuine consecutive-year pair. A naive
+ *  `20\d{2}[-_ ]?(\d{2})` match turns "Statements_2024-2025.pdf" into "FY2024-20"
+ *  and "ABC_20240331.pdf" into "FY2024-03" — invalid labels that the backend then
+ *  stores as extra phantom periods alongside the real ones. Returning "" is safe:
+ *  the extractor reads the period off the statement itself.
+ */
+export function fiscalYearFromFilename(name: string): string {
+  const start = (y: number) => `FY${y}-${String((y + 1) % 100).padStart(2, "0")}`;
+
+  // 2024-2025 / 2024_2025 — full four-digit pair
+  const full = name.match(/(20\d{2})[-_/ ](20\d{2})(?!\d)/);
+  if (full) {
+    const [a, b] = [Number(full[1]), Number(full[2])];
+    return b === a + 1 ? start(a) : "";
+  }
+  // FY2024-25 / 2024-25 — two-digit suffix, not part of a longer number
+  const short = name.match(/(?<!\d)(20\d{2})[-_/ ](\d{2})(?!\d)/);
+  if (short) {
+    const a = Number(short[1]);
+    return Number(short[2]) === (a + 1) % 100 ? start(a) : "";
+  }
+  return "";
+}
+
 export function fmtFileSize(bytes: number | null | undefined): string {
   if (!bytes) return "—";
   if (bytes < 1024) return `${bytes} B`;
