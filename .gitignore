@@ -14,3 +14,7 @@ storage/.master_key
 !storage/reports/.gitkeep
 *.db
 .DS_Store
+
+# Local capstone writeups and source statements. The three Schedule III PDFs the
+# document pipeline is tested against live in backend/tests/fixtures/ instead.
+CompanyVal AI Docs/

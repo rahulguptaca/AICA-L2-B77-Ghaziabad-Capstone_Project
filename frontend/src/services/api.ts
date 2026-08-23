@@ -93,6 +93,13 @@ export function fmtIndian(v: number | null | undefined): string {
   return v.toLocaleString("en-IN");
 }
 
+export function fmtFileSize(bytes: number | null | undefined): string {
+  if (!bytes) return "—";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1048576) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / 1048576).toFixed(1)} MB`;
+}
+
 export function fmtDate(iso: string | null | undefined, withTime = false): string {
   if (!iso) return "—";
   const d = new Date(iso);

@@ -12,6 +12,11 @@ from . import models  # noqa: F401 — register all models
 from .api import cases, documents, engine as engine_api, interview, settings_api
 
 logging.basicConfig(level=logging.INFO)
+# Defence in depth: the root logger at INFO makes third-party libraries verbose, and
+# httpx logs every request URL. Provider credentials must never ride in a URL (see
+# gemini.py), but keep the transport layer quiet so a future call site can't leak one.
+for _noisy in ("httpx", "httpcore"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 settings = get_settings()
 

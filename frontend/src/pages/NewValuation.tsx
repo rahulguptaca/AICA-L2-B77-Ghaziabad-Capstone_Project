@@ -10,7 +10,7 @@ import {
   Scale, ClipboardCheck, Lightbulb, UploadCloud, FileText, CheckCircle2,
   AlertTriangle, Loader2,
 } from "lucide-react";
-import { api } from "../services/api";
+import { api, fmtFileSize } from "../services/api";
 import { useCase } from "../hooks/useCase";
 import { ProgressRing } from "../components/ui";
 import type { CaseSummary, DocumentInfo } from "../types";
@@ -86,23 +86,32 @@ export default function NewValuation() {
   });
 
   const upload = useMutation({
-    mutationFn: async (files: FileList) => {
+    mutationFn: async (files: File[]) => {
       setUploadError("");
       setProcessing(true);
       const uploaded: DocumentInfo[] = [];
-      for (const file of Array.from(files)) {
+      const failures: string[] = [];
+      // per-file try/catch: one bad file must not discard the others already uploaded
+      for (const file of files) {
         const fyMatch = file.name.match(/20\d{2}[-_ ]?(\d{2})/);
         const fy = fyMatch ? `FY${fyMatch[0].slice(0, 4)}-${fyMatch[1]}` : "";
         const form = new FormData();
         form.append("file", file);
         form.append("fiscal_year_label", fy);
-        const doc = await api.upload<DocumentInfo>(`/api/valuations/${caseId}/documents`, form);
-        await api.post(`/api/documents/${doc.id}/process`);
-        uploaded.push(doc);
+        try {
+          const doc = await api.upload<DocumentInfo>(`/api/valuations/${caseId}/documents`, form);
+          await api.post(`/api/documents/${doc.id}/process`);
+          uploaded.push(doc);
+        } catch (err) {
+          failures.push(`${file.name}: ${(err as Error).message}`);
+        }
       }
-      return uploaded;
+      return { uploaded, failures };
     },
-    onSuccess: (uploaded) => setDocs((prev) => [...prev, ...uploaded]),
+    onSuccess: ({ uploaded, failures }) => {
+      setDocs((prev) => [...prev, ...uploaded]);
+      setUploadError(failures.join(" · "));
+    },
     onSettled: () => setProcessing(false),
     onError: (e: Error) => setUploadError(e.message),
   });
@@ -260,7 +269,12 @@ export default function NewValuation() {
               </p>
             </button>
             <input ref={fileRef} type="file" multiple accept=".pdf,.xlsx,.xls" className="hidden"
-              onChange={(e) => e.target.files?.length && upload.mutate(e.target.files)} />
+              onChange={(e) => {
+                const picked = Array.from(e.target.files ?? []);
+                // reset first (snapshot above) so re-picking the same filename still fires onChange
+                e.target.value = "";
+                if (picked.length) upload.mutate(picked);
+              }} />
             {uploadError && <p className="mt-2 text-xs text-risk-text">{uploadError}</p>}
 
             {docs.length > 0 && (
@@ -275,7 +289,7 @@ export default function NewValuation() {
                     </div>
                     <p className="text-[11px] font-bold text-navy mt-1.5 truncate">{d.fiscal_year_label || d.original_filename}</p>
                     <p className="text-[10px] text-slate3 truncate">{d.original_filename}</p>
-                    <p className="text-[10px] text-slate3">{(d.size_bytes / 1048576).toFixed(1)} MB</p>
+                    <p className="text-[10px] text-slate3">{fmtFileSize(d.size_bytes)}</p>
                   </div>
                 ))}
               </div>

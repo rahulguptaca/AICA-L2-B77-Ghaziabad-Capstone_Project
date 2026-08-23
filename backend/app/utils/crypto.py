@@ -21,11 +21,24 @@ def _master_key() -> bytes:
     if settings.companyval_master_key:
         return settings.companyval_master_key.encode()
     if _DEV_KEY_FILE.exists():
+        _harden(_DEV_KEY_FILE)  # repair perms on keys written before this was enforced
         return _DEV_KEY_FILE.read_bytes().strip()
     key = Fernet.generate_key()
     _DEV_KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    # Create owner-only *before* writing: this key decrypts every stored provider
+    # key, and the default 0644 would leave it world-readable on a shared machine.
+    _DEV_KEY_FILE.touch(mode=0o600, exist_ok=True)
+    _harden(_DEV_KEY_FILE)
     _DEV_KEY_FILE.write_bytes(key)
     return key
+
+
+def _harden(path: Path) -> None:
+    """Best-effort chmod 0600; silently skipped on filesystems without POSIX modes."""
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
 
 
 def encrypt_secret(plain: str) -> str:

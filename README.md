@@ -47,11 +47,17 @@ cd backend && .venv/bin/python -m uvicorn app.main:app --port 8000 --reload
 cd frontend && npm run dev        # prints the URL — normally http://localhost:5173
 ```
 
-**Reset all data to the fresh seeded state:**
+**Reset all data to the fresh seeded state** — safe to run with the server up:
 
 ```bash
-cd backend && rm -f ../storage/companyval.db && .venv/bin/python -m app.seed
+cd backend && .venv/bin/python -m app.seed --reset
 ```
+
+> Do **not** reset by deleting `storage/companyval.db` while the backend is running.
+> Unlinking the file leaves the live server writing to an orphaned inode: uploads look
+> like they succeed, then disappear the moment the server restarts and opens the newly
+> created file. `--reset` drops and recreates the tables in place, so there is only ever
+> one database file.
 
 **Set up on a new machine:**
 

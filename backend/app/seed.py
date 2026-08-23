@@ -95,6 +95,22 @@ ABC_ANSWERS: dict[str, tuple[str, str]] = {
 }
 
 
+def reset(verbose: bool = True) -> None:
+    """Drop and recreate every table *in place*, then reseed.
+
+    Deliberately does NOT delete the database file. Unlinking a SQLite file while
+    the server holds it open leaves the running process writing to an orphaned
+    inode: uploads appear to succeed, then vanish when the server restarts and
+    opens the newly created file. Resetting through the engine keeps one file and
+    one inode, so a running server sees the reset immediately.
+    """
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    if verbose:
+        print("Database reset — all tables dropped and recreated.")
+    seed(verbose=verbose)
+
+
 def seed(verbose: bool = True) -> None:
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
@@ -281,4 +297,11 @@ def seed(verbose: bool = True) -> None:
 
 
 if __name__ == "__main__":
-    seed()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Seed the CompanyVal AI demo database.")
+    parser.add_argument("--reset", action="store_true",
+                        help="drop and recreate all tables in place before seeding "
+                             "(safe to run while the server is up; never delete the .db file)")
+    args = parser.parse_args()
+    reset() if args.reset else seed()
