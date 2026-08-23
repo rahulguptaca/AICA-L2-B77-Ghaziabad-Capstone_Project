@@ -42,6 +42,25 @@ app.include_router(engine_api.router, tags=["valuation"])
 app.include_router(settings_api.router, tags=["settings"])
 
 
+@app.get("/", include_in_schema=False)
+def root() -> dict:
+    """Signpost for anyone who opens the API port in a browser.
+
+    This is the API, not the app. Hitting :8000 expecting the UI and getting a
+    bare {"detail":"Not Found"} reads like the backend is broken when it is
+    running perfectly, so say where the app actually is.
+    """
+    return {
+        "service": "CompanyVal AI API",
+        "status": "ok",
+        "message": "This is the API, not the web app. Open the frontend to use "
+                   "CompanyVal AI; browse the API here.",
+        "app_url": settings.frontend_url,
+        "api_docs": "/docs",
+        "openapi": "/openapi.json",
+    }
+
+
 @app.on_event("startup")
 def startup() -> None:
     # Alembic manages migrations in production; create_all covers local dev.

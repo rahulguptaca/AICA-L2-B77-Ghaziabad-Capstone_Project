@@ -40,12 +40,24 @@ Day-to-day commands once the backend venv and frontend `node_modules` already ex
 **Backend setup** / **Frontend setup** below for the first-time walkthrough). Run from the
 repo root.
 
-**Run the app** (two terminals):
+**Run the app.** Each server runs in the foreground, so these need **two separate
+terminals** — chaining them in one shell leaves the frontend never starting.
+
+Terminal 1 — API on :8000:
 
 ```bash
 cd backend && .venv/bin/python -m uvicorn app.main:app --port 8000 --reload
-cd frontend && npm run dev        # prints the URL — normally http://localhost:5173
 ```
+
+Terminal 2 — the web app on :5173:
+
+```bash
+cd frontend && npm run dev
+```
+
+Then open **http://localhost:5173** — that is the app. Port 8000 serves only the
+API; opening it in a browser just points you back here, and `/docs` has the
+interactive API reference.
 
 **Reset all data to the fresh seeded state** — safe to run with the server up:
 
