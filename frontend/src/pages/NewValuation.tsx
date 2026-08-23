@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -6,13 +6,14 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
   Building2, Calendar, IndianRupee, Hash, Globe2, Target, User2, PieChart,
-  ArrowRight, Check, Sparkles, ShieldCheck, Landmark, Tag, Percent, FileUp,
-  Scale, ClipboardCheck, Lightbulb,
+  ArrowRight, Check, Sparkles, ShieldCheck, Landmark, Tag, Percent,
+  Scale, ClipboardCheck, Lightbulb, UploadCloud, FileText, CheckCircle2,
+  AlertTriangle, Loader2,
 } from "lucide-react";
 import { api } from "../services/api";
 import { useCase } from "../hooks/useCase";
 import { ProgressRing } from "../components/ui";
-import type { CaseSummary } from "../types";
+import type { CaseSummary, DocumentInfo } from "../types";
 
 const schema = z.object({
   company_name: z.string().min(2, "Company name is required"),
@@ -50,7 +51,13 @@ export default function NewValuation() {
   const [step, setStep] = useState(1);
   const [methods, setMethods] = useState({ dcf: true, market_multiple: true, adjusted_nav: true });
 
-  const { register, handleSubmit, watch, trigger, formState: { errors } } = useForm<FormData>({
+  const [caseId, setCaseId] = useState<string | null>(null);
+  const [docs, setDocs] = useState<DocumentInfo[]>([]);
+  const [processing, setProcessing] = useState(false);
+  const [uploadError, setUploadError] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const { register, handleSubmit, watch, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(schema),
     defaultValues: {
       company_name: "", industry: "Food & Beverages", entity_type: "Private Limited Company",
@@ -61,9 +68,47 @@ export default function NewValuation() {
   });
   const values = watch();
 
-  const create = useMutation({
-    mutationFn: async (data: FormData) => {
-      const created = await api.post<CaseSummary>("/api/valuations", data);
+  // Case is created right after Step 1 (instead of at the end) so Step 2 has a
+  // case id to upload documents against — the backend has no pre-case staging endpoint.
+  const createCase = useMutation({
+    mutationFn: (data: FormData) => api.post<CaseSummary>("/api/valuations", data),
+    onSuccess: (created) => {
+      // Push the new case into the cache synchronously (not just invalidate) so
+      // useCase's reconciliation effect sees it immediately — otherwise it still
+      // has the stale case list, decides the new id "doesn't exist", and reverts
+      // activeCaseId back to the seeded demo case before the refetch lands.
+      qc.setQueryData<CaseSummary[]>(["cases"], (old) => [...(old ?? []), created]);
+      qc.invalidateQueries({ queryKey: ["cases"] });
+      setCaseId(created.id);
+      setActiveCaseId(created.id);
+      setStep(2);
+    },
+  });
+
+  const upload = useMutation({
+    mutationFn: async (files: FileList) => {
+      setUploadError("");
+      setProcessing(true);
+      const uploaded: DocumentInfo[] = [];
+      for (const file of Array.from(files)) {
+        const fyMatch = file.name.match(/20\d{2}[-_ ]?(\d{2})/);
+        const fy = fyMatch ? `FY${fyMatch[0].slice(0, 4)}-${fyMatch[1]}` : "";
+        const form = new FormData();
+        form.append("file", file);
+        form.append("fiscal_year_label", fy);
+        const doc = await api.upload<DocumentInfo>(`/api/valuations/${caseId}/documents`, form);
+        await api.post(`/api/documents/${doc.id}/process`);
+        uploaded.push(doc);
+      }
+      return uploaded;
+    },
+    onSuccess: (uploaded) => setDocs((prev) => [...prev, ...uploaded]),
+    onSettled: () => setProcessing(false),
+    onError: (e: Error) => setUploadError(e.message),
+  });
+
+  const finalize = useMutation({
+    mutationFn: async () => {
       const w = {
         weight_dcf: methods.dcf ? 0.5 : 0,
         weight_market_multiple: methods.market_multiple ? 0.3 : 0,
@@ -73,12 +118,10 @@ export default function NewValuation() {
       if (total > 0 && total !== 1) {
         (Object.keys(w) as (keyof typeof w)[]).forEach((k) => (w[k] = w[k] / total));
       }
-      await api.put(`/api/valuations/${created.id}/assumptions`, { values: w });
-      return created;
+      await api.put(`/api/valuations/${caseId}/assumptions`, { values: w });
     },
-    onSuccess: (created) => {
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["cases"] });
-      setActiveCaseId(created.id);
       navigate("/financials");
     },
   });
@@ -90,13 +133,12 @@ export default function NewValuation() {
     return Math.min(65, Math.round((filled / req.length) * 65));
   }, [values]);
 
-  const next = async () => {
-    if (step === 1) {
-      const ok = await trigger();
-      if (!ok) return;
-    }
-    setStep((s) => Math.min(4, s + 1));
-  };
+  const saveAndContinue = handleSubmit((d) => {
+    if (caseId) { setStep(2); return; }
+    createCase.mutate(d);
+  });
+
+  const next = () => setStep((s) => Math.min(4, s + 1));
 
   const field = (
     name: keyof FormData, label: string, icon: React.ReactNode, help: string,
@@ -181,12 +223,17 @@ export default function NewValuation() {
               </div>
             </div>
 
+            {createCase.isError && (
+              <p className="mt-4 text-sm text-risk-text">{(createCase.error as Error).message}</p>
+            )}
             <div className="mt-6 flex items-center justify-between rounded-xl bg-primary-50/60 border border-primary-100/50 px-4 py-3">
               <p className="text-[12.5px] text-slate2 flex items-center gap-2">
                 <Lightbulb size={14} className="text-warn" />
                 <span><b className="text-navy">Tip</b> — Accurate inputs lead to more reliable valuations. You can update or refine these details later in the case settings.</span>
               </p>
-              <button className="btn-primary" onClick={next}>Save & Continue <ArrowRight size={15} /></button>
+              <button className="btn-primary" onClick={saveAndContinue} disabled={createCase.isPending}>
+                {createCase.isPending ? "Creating…" : <>Save & Continue <ArrowRight size={15} /></>}
+              </button>
             </div>
           </div>
         )}
@@ -195,13 +242,45 @@ export default function NewValuation() {
           <div className="card p-6">
             <p className="text-xs font-semibold text-slate3">Step 2 of 4</p>
             <h2 className="text-lg font-extrabold text-navy mt-0.5">Financial Inputs</h2>
-            <p className="text-sm text-slate2 mb-6">Financial statements are uploaded and verified in the Financials module after the case is created.</p>
-            <div className="rounded-xl border-2 border-dashed border-line bg-page/50 p-10 text-center">
-              <FileUp size={34} className="mx-auto text-primary" />
-              <p className="font-semibold text-navy mt-3">Upload last 3 years of financial statements</p>
-              <p className="text-sm text-slate2 mt-1">PDF, XLSX or XLS up to 25MB each. Python extraction + Gemini visual verification run automatically after upload.</p>
-              <p className="text-xs text-slate3 mt-3">You'll be taken to the Financials workspace right after case creation.</p>
-            </div>
+            <p className="text-sm text-slate2 mb-6">Upload the last 3 years of financial statements. Python extraction + Gemini visual verification run automatically after upload.</p>
+            <button
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              disabled={processing}
+              className="w-full rounded-xl border-2 border-dashed border-line bg-page/50 p-10 text-center hover:border-primary/60 hover:bg-primary-50/40 transition disabled:opacity-60"
+            >
+              {processing
+                ? <Loader2 size={34} className="mx-auto text-primary animate-spin" />
+                : <UploadCloud size={34} className="mx-auto text-primary" />}
+              <p className="font-semibold text-navy mt-3">
+                {processing ? "Processing documents…" : "Upload last 3 years of financial statements"}
+              </p>
+              <p className="text-sm text-slate2 mt-1">
+                PDF, XLSX or XLS up to 25MB each. {!processing && <span className="text-primary">Click to browse.</span>}
+              </p>
+            </button>
+            <input ref={fileRef} type="file" multiple accept=".pdf,.xlsx,.xls" className="hidden"
+              onChange={(e) => e.target.files?.length && upload.mutate(e.target.files)} />
+            {uploadError && <p className="mt-2 text-xs text-risk-text">{uploadError}</p>}
+
+            {docs.length > 0 && (
+              <div className="grid grid-cols-3 gap-2.5 mt-4">
+                {docs.map((d) => (
+                  <div key={d.id} className="rounded-lg border border-line bg-surface p-2.5">
+                    <div className="flex items-center justify-between">
+                      <FileText size={15} className="text-risk" />
+                      {d.status === "failed"
+                        ? <AlertTriangle size={14} className="text-risk" />
+                        : <CheckCircle2 size={14} className="text-mint" />}
+                    </div>
+                    <p className="text-[11px] font-bold text-navy mt-1.5 truncate">{d.fiscal_year_label || d.original_filename}</p>
+                    <p className="text-[10px] text-slate3 truncate">{d.original_filename}</p>
+                    <p className="text-[10px] text-slate3">{(d.size_bytes / 1048576).toFixed(1)} MB</p>
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="text-xs text-slate3 mt-3">You can also skip this step and upload documents later from the Financials workspace.</p>
             <div className="mt-6 flex justify-between">
               <button className="btn-secondary" onClick={() => setStep(1)}>Back</button>
               <button className="btn-primary" onClick={next}>Continue <ArrowRight size={15} /></button>
@@ -267,13 +346,13 @@ export default function NewValuation() {
                 </div>
               ))}
             </div>
-            {create.isError && (
-              <p className="mt-4 text-sm text-risk-text">{(create.error as Error).message}</p>
+            {finalize.isError && (
+              <p className="mt-4 text-sm text-risk-text">{(finalize.error as Error).message}</p>
             )}
             <div className="mt-6 flex justify-between">
               <button className="btn-secondary" onClick={() => setStep(3)}>Back</button>
-              <button className="btn-primary" onClick={handleSubmit((d) => create.mutate(d))} disabled={create.isPending}>
-                <Sparkles size={15} /> {create.isPending ? "Creating…" : "Create Valuation"}
+              <button className="btn-primary" onClick={() => finalize.mutate()} disabled={finalize.isPending}>
+                <Sparkles size={15} /> {finalize.isPending ? "Finalizing…" : "Create Valuation"}
               </button>
             </div>
           </div>
@@ -327,7 +406,7 @@ export default function NewValuation() {
               </li>
             ))}
           </ul>
-          <button className="btn-primary w-full mt-4" onClick={handleSubmit((d) => create.mutate(d))} disabled={create.isPending || step < 4}>
+          <button className="btn-primary w-full mt-4" onClick={() => finalize.mutate()} disabled={finalize.isPending || step < 4}>
             <Sparkles size={15} /> Create Valuation
           </button>
           <p className="mt-3 text-[11px] text-slate3 flex items-center gap-1.5">
