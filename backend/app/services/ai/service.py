@@ -19,7 +19,10 @@ DEFAULT_AI_CONFIG = {
     "model_display": "Gemini 3.6 Flash",
     "temperature": 0.2,
     "structured_output": True,
-    "visual_verification": True,
+    # Off by default: Python extraction is the authoritative source, and rendering
+    # every statement page for the vision model dominates processing time. Turn it
+    # on in Settings to cross-check extracted values against the page images.
+    "visual_verification": False,
     "ai_final_report": True,
     "key_set": False,
     "key_tail": "",
