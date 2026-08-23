@@ -41,7 +41,11 @@ class GeminiProvider(AIProvider):
         if json_output:
             body["generationConfig"]["response_mime_type"] = "application/json"
         try:
-            resp = httpx.post(url, params={"key": self._api_key}, json=body, timeout=timeout)
+            # Credential goes in a header, never the URL: httpx logs full request
+            # URLs at INFO, and httpx errors embed the URL in their message — either
+            # would write the plaintext key to logs and to AICallLog.error.
+            resp = httpx.post(url, headers={"x-goog-api-key": self._api_key},
+                              json=body, timeout=timeout)
         except httpx.HTTPError as e:
             raise AIProviderError(f"Gemini connection failed: {e}") from e
         if resp.status_code == 429:

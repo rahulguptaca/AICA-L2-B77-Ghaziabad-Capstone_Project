@@ -144,14 +144,27 @@ export default function Financials() {
           >
             {processing ? (
               <Loader2 size={30} className="mx-auto text-primary animate-spin" />
+            ) : data.locked ? (
+              <Lock size={30} className="mx-auto text-slate3" />
             ) : (
               <UploadCloud size={30} className="mx-auto text-primary" />
             )}
             <p className="text-sm font-semibold text-navy mt-2.5">
-              {processing ? "Processing documents…" : <>Drag and drop files here or <span className="text-primary">click to browse</span></>}
+              {processing ? "Processing documents…"
+                : data.locked ? "Financials are locked for this case"
+                : <>Drag and drop files here or <span className="text-primary">click to browse</span></>}
             </p>
-            <p className="text-xs text-slate3 mt-1">PDF, XLSX, XLS up to 25MB each</p>
+            <p className="text-xs text-slate3 mt-1">
+              {data.locked
+                ? "Unlock below to upload or replace statements."
+                : "PDF, XLSX, XLS up to 25MB each"}
+            </p>
           </button>
+          {data.locked && (
+            <button className="btn-secondary w-full mt-2 !py-1.5 text-xs" onClick={() => lock.mutate(true)}>
+              <Unlock size={13} /> Unlock to upload
+            </button>
+          )}
           <input ref={fileRef} type="file" multiple accept=".pdf,.xlsx,.xls" className="hidden"
             onChange={(e) => {
               const picked = Array.from(e.target.files ?? []);
