@@ -7,6 +7,7 @@ and items fall back to manual review."""
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +21,10 @@ from ...models import (
 )
 from ..ai.provider import AIProviderError
 from ..ai.service import get_provider, logged_call, get_ai_config
-from ..financial.canonical import STATEMENT_OF
+from ..financial.canonical import (
+    ADDITIVE_METRICS, ADDITIVE_PARENT, METRIC_LABELS, STATEMENT_OF,
+    normalise_metric_sign,
+)
 from ..financial.derive import derive_missing_metrics
 from ..financial.numbers import parse_amount
 from .extractor import (
@@ -155,11 +159,16 @@ def _store_pages_and_raw(db: Session, doc: Document, ext: PdfExtraction) -> None
     db.commit()
 
 
-def _upsert_line_items(db: Session, doc: Document, ext: PdfExtraction) -> int:
-    """Map extracted items to canonical line items (python_value side)."""
-    created = 0
-    period_fallback = doc.fiscal_year_label
-    seen: set[tuple[str, str]] = set()
+def _resolve_items(ext: PdfExtraction, period_fallback: str | None) -> dict:
+    """Collapse extracted items to one value per (period, metric).
+
+    Default is first-wins: statements restate their face figures in the notes,
+    and the face comes first. ADDITIVE_METRICS instead SUM their components, but
+    only those appearing on the same page as the first hit — the notes repeat
+    "Cost of materials consumed" verbatim, so a document-wide sum doubles it.
+    A parent/total row carrying a value always beats the component sum.
+    """
+    resolved: dict[tuple[str, str], dict] = {}
     for it in ext.items:
         if not it.metric or it.value is None:
             continue
@@ -167,15 +176,40 @@ def _upsert_line_items(db: Session, doc: Document, ext: PdfExtraction) -> int:
         if not period:
             continue
         key = (period, it.metric)
-        if key in seen:
-            continue  # first match on a page wins (statements list totals later)
-        seen.add(key)
+        cur = resolved.get(key)
+        if cur is None:
+            resolved[key] = {"item": it, "value": it.value, "page": it.page_number,
+                             "parts": 1, "parent": False}
+            cur = resolved[key]
+        elif (it.metric in ADDITIVE_METRICS and it.page_number == cur["page"]
+              and not cur["parent"]):
+            cur["value"] += it.value
+            cur["parts"] += 1
+        else:
+            continue
+        parent_re = ADDITIVE_PARENT.get(it.metric)
+        if parent_re and re.search(parent_re, _norm_label(it.label)):
+            cur.update(item=it, value=it.value, parts=1, parent=True)
+    return resolved
 
+
+def _norm_label(label: str) -> str:
+    return re.sub(r"^\s*(?:\((?:[a-z]|[ivxlcdm]{1,6}|\d{1,3})\)|"
+                  r"(?:[a-z]|[ivxlcdm]{1,6}|\d{1,3})[.)])\s+", "",
+                  re.sub(r"\s+", " ", label.strip().lower()), count=1).strip()
+
+
+def _upsert_line_items(db: Session, doc: Document, ext: PdfExtraction) -> int:
+    """Map extracted items to canonical line items (python_value side)."""
+    created = 0
+    period_fallback = doc.fiscal_year_label
+    for (period, metric), res in _resolve_items(ext, period_fallback).items():
+        it = res["item"]
         _ensure_period(db, doc.case_id, period)
         row = db.execute(select(FinancialLineItem).where(
             FinancialLineItem.case_id == doc.case_id,
             FinancialLineItem.period_label == period,
-            FinancialLineItem.metric == it.metric,
+            FinancialLineItem.metric == metric,
         )).scalars().first()
         if row is None:
             # Set the defaults explicitly: the confidence guard below only fires on
@@ -183,14 +217,18 @@ def _upsert_line_items(db: Session, doc: Document, ext: PdfExtraction) -> int:
             # confidence at 0, which the UI averaged into a misleading headline figure.
             row = FinancialLineItem(
                 case_id=doc.case_id, period_label=period,
-                statement=STATEMENT_OF.get(it.metric, "pnl"), metric=it.metric,
+                statement=STATEMENT_OF.get(metric, "pnl"), metric=metric,
                 verification_status="unverified", confidence=0.0,
             )
             db.add(row)
             created += 1
-        row.python_value = it.value
-        row.original_label = it.label
-        row.original_display = it.raw_value
+        row.python_value = normalise_metric_sign(metric, res["value"])
+        # A composed figure names its components, so a reviewer is never shown a
+        # summed value under the caption of a single line it does not equal.
+        row.original_label = (it.label if res["parts"] == 1
+                              else f"{METRIC_LABELS.get(metric, metric)} "
+                                   f"({res['parts']} lines, incl. {it.label})")
+        row.original_display = it.raw_value if res["parts"] == 1 else ""
         row.unit = ext.unit_name or "INR"
         row.source_document_id = doc.id
         row.source_page = it.page_number
