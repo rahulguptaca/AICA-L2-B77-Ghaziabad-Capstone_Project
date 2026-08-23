@@ -21,11 +21,17 @@ const PIPELINE_STEPS = [
   { key: "awaiting_review", label: "Verification & Review", sub: "Review discrepancies and confirm data" },
 ];
 
-function stepState(docs: DocumentInfo[], stepKey: string): "done" | "active" | "waiting" | "pending" {
+function stepState(docs: DocumentInfo[], stepKey: string,
+): "done" | "active" | "waiting" | "failed" | "pending" {
   if (!docs.length) return "pending";
   const order = ["uploaded", "reading", "extracting", "rendering", "ai_verifying",
     "reconciling", "awaiting_review", "verified", "locked"];
-  const minIdx = Math.min(...docs.map((d) => {
+  // A failed document has stopped moving; it must not drag the tracker backwards.
+  // Progress reflects the documents still in flight — indexOf("failed") is -1, and
+  // coercing that to 0 used to pin the whole pipeline at step 1 forever.
+  const live = docs.filter((d) => d.status !== "failed");
+  if (!live.length) return "failed";
+  const minIdx = Math.min(...live.map((d) => {
     const i = order.indexOf(d.status);
     return i < 0 ? 0 : i;
   }));
@@ -110,6 +116,10 @@ export default function Financials() {
   if (!activeCaseId) return <Spinner />;
   if (isLoading || !data) return <Spinner label="Loading financials…" />;
 
+  const failedDocs = data.documents.filter((d) => d.status === "failed");
+  // Values are always Python-extracted; AI vision only cross-checks them, and is off
+  // by default. Say which one produced these numbers instead of implying low quality.
+  const aiVerificationRan = data.extraction_counts.verifications > 0;
   const stmtCounts: Record<string, number> = { pnl: 0, balance_sheet: 0, cash_flow: 0 };
   allItems.forEach((i) => { if (i.statement && stmtCounts[i.statement] !== undefined) stmtCounts[i.statement]++; });
   const avgConfidence = allItems.length
@@ -207,7 +217,14 @@ export default function Financials() {
         {/* extraction progress */}
         <div className="col-span-3 card-pad">
           <CardTitle>Extraction Progress</CardTitle>
-          <p className="text-xs text-slate3 -mt-3 mb-4">AI is extracting data from your documents</p>
+          <p className="text-xs text-slate3 -mt-3 mb-4">
+            {data.locked ? "Financials are verified and locked"
+              : processing ? "Extracting financial data from your documents"
+              : failedDocs.length && failedDocs.length === data.documents.length
+                ? "No document could be processed"
+              : data.documents.length ? "Extraction finished — see the status of each step below"
+              : "Upload statements to start extraction"}
+          </p>
           <ol className="space-y-4">
             {PIPELINE_STEPS.map((s) => {
               const st = data.locked ? "done" : stepState(data.documents, s.key);
@@ -217,18 +234,37 @@ export default function Financials() {
                     {st === "done" ? <CheckCircle2 size={18} className="text-mint" />
                       : st === "active" ? <Loader2 size={18} className="text-primary animate-spin" />
                       : st === "waiting" ? <AlertTriangle size={18} className="text-warn" />
+                      : st === "failed" ? <AlertTriangle size={18} className="text-risk" />
                       : <Circle size={18} className="text-line" />}
                   </span>
                   <div>
                     <p className={`text-[13px] font-semibold ${st === "pending" ? "text-slate3" : "text-navy"}`}>{s.label}</p>
                     <p className="text-[11px] text-slate3">
-                      {st === "waiting" ? "Ready for you — review below, then lock" : s.sub}
+                      {st === "waiting" ? "Ready for you — review below, then lock"
+                        : st === "failed" ? "Could not be completed"
+                        : s.sub}
                     </p>
                   </div>
                 </li>
               );
             })}
           </ol>
+          {failedDocs.length > 0 && (
+            <div className="mt-3 rounded-lg border border-risk/40 bg-risk-bg/40 px-3 py-2">
+              <p className="text-[11.5px] font-bold text-risk-text flex items-center gap-1.5">
+                <AlertTriangle size={12} /> {failedDocs.length} document(s) failed
+              </p>
+              {failedDocs.map((d) => (
+                <p key={d.id} className="text-[11px] text-slate2 mt-1">
+                  <span className="font-semibold">{d.original_filename}</span>
+                  {d.error ? ` — ${d.error}` : ""}
+                </p>
+              ))}
+              <p className="text-[11px] text-slate3 mt-1.5">
+                Re-upload the file to try again. Other documents were unaffected.
+              </p>
+            </div>
+          )}
           <div className="mt-4 rounded-lg bg-primary-50/60 border border-primary-100/50 px-3 py-2 text-[11.5px] text-primary-700 flex items-center gap-2">
             <Clock size={13} />
             {data.locked ? "Financials verified and locked"
@@ -273,7 +309,11 @@ export default function Financials() {
             <div className="card-pad">
               <p className="text-xs font-semibold text-slate2">Extraction Confidence</p>
               <p className="text-[26px] font-extrabold text-navy mt-1">{Math.round(avgConfidence * 100)}%</p>
-              <p className="text-[11px] font-semibold text-mint-text mt-0.5">{avgConfidence >= 0.85 ? "High Confidence" : "Moderate Confidence"}</p>
+              <p className="text-[11px] font-semibold text-mint-text mt-0.5">
+                {aiVerificationRan
+                  ? (avgConfidence >= 0.85 ? "High Confidence" : "Moderate Confidence")
+                  : "Python extraction"}
+              </p>
             </div>
             <div className="card-pad">
               <p className="text-xs font-semibold text-slate2">Discrepancies Found</p>
@@ -293,7 +333,7 @@ export default function Financials() {
             <div className="flex gap-6 mt-3 text-[12px]">
               <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-mint" /> <b>{c.verified}</b> Verified <span className="text-slate3">{pct(c.verified)}%</span></span>
               <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-warn" /> <b>{c.needs_review}</b> Needs Review <span className="text-slate3">{pct(c.needs_review)}%</span></span>
-              <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-violet2" /> <b>{c.low_confidence + c.unverified}</b> Other <span className="text-slate3">{pct(c.low_confidence + c.unverified)}%</span></span>
+              <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-violet2" /> <b>{c.low_confidence + c.unverified}</b> {aiVerificationRan ? "Other" : "Python-extracted"} <span className="text-slate3">{pct(c.low_confidence + c.unverified)}%</span></span>
               <span className="ml-auto">
                 {data.locked ? (
                   <button className="btn-secondary !py-1.5 !px-3 text-xs" onClick={() => lock.mutate(true)}>

@@ -58,17 +58,35 @@ class GeminiProvider(AIProvider):
         except (KeyError, IndexError) as e:
             raise AIProviderError(f"Malformed Gemini response: {json.dumps(data)[:300]}") from e
 
-    def _generate_json(self, parts: list[dict], system: str, **kw) -> dict[str, Any]:
+    def _generate_json(self, parts: list[dict], system: str, list_key: str | None = None,
+                       **kw) -> dict[str, Any]:
+        """Return a dict, or raise AIProviderError — never another exception type.
+
+        Callers treat this as a mapping and immediately call .get(). A model is free
+        to answer with a bare array, a string or null, and any of those used to escape
+        as an AttributeError/TypeError that killed the whole document pipeline. Every
+        malformed shape now becomes AIProviderError, which callers already handle as
+        "AI unavailable" and degrade past. ``list_key`` names the field to wrap a
+        top-level array into, for tasks whose natural answer *is* a list.
+        """
         text = self._generate(parts, system, **kw)
         try:
-            return json.loads(text)
+            data = json.loads(text)
         except json.JSONDecodeError:
             # tolerate fenced JSON
             cleaned = text.strip().removeprefix("```json").removeprefix("```").removesuffix("```")
             try:
-                return json.loads(cleaned)
+                data = json.loads(cleaned)
             except json.JSONDecodeError as e:
                 raise AIProviderError(f"Gemini returned non-JSON output: {text[:200]}") from e
+
+        if isinstance(data, dict):
+            return data
+        if list_key and isinstance(data, list):
+            return {list_key: data}
+        raise AIProviderError(
+            f"Gemini returned a JSON {type(data).__name__} where an object was expected"
+        )
 
     # -- interface -----------------------------------------------------------
     def test_connection(self) -> bool:
@@ -90,8 +108,10 @@ class GeminiProvider(AIProvider):
             {"inline_data": {"mime_type": "image/png", "data": img_b64}},
             {"text": user_text},
         ]
-        return self._generate_json(parts, prompts.VERIFY_DOCUMENT_SYSTEM, temperature=0.1,
-                                   timeout=120.0)
+        # the natural answer here is a list of checked items, and the model sometimes
+        # returns that array bare instead of under an "items" key
+        return self._generate_json(parts, prompts.VERIFY_DOCUMENT_SYSTEM, list_key="items",
+                                   temperature=0.1, timeout=120.0)
 
     def generate_question(self, context: dict[str, Any]) -> dict[str, Any]:
         parts = [{"text": "Context:\n" + json.dumps(context, indent=1, default=str)

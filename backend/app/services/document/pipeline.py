@@ -67,8 +67,17 @@ def process_document(db: Session, doc: Document) -> dict[str, Any]:
 
         _store_pages_and_raw(db, doc, ext)
 
+        # Decide up front whether AI verification will actually run: rendering pages
+        # is the most expensive step in the pipeline (up to 8 PNGs at 200 DPI per
+        # document) and the rendered images exist *only* to be sent to the vision
+        # model — nothing in the UI requests them. Skipping the render when
+        # verification is off is what makes Python-only extraction fast.
+        cfg = get_ai_config(db)
+        provider = get_provider(db)
+        will_verify = bool(provider) and bool(cfg.get("visual_verification"))
+
         rendered: dict[int, str] = {}
-        if is_pdf:
+        if is_pdf and will_verify:
             _set_status(db, doc, "rendering")
             candidates = [p.page_number for p in ext.pages if p.is_candidate][:8]
             rendered = render_pages(path, candidates, settings.render_dir, doc.id)
@@ -82,9 +91,7 @@ def process_document(db: Session, doc: Document) -> dict[str, Any]:
         items_created = _upsert_line_items(db, doc, ext)
 
         verification = {"attempted": False, "verified": 0, "errors": []}
-        cfg = get_ai_config(db)
-        provider = get_provider(db)
-        if provider and cfg.get("visual_verification") and rendered:
+        if will_verify and rendered:
             _set_status(db, doc, "ai_verifying")
             verification = _run_visual_verification(db, doc, ext, rendered, provider)
 
@@ -203,7 +210,15 @@ def _run_visual_verification(db: Session, doc: Document, ext: PdfExtraction,
         except AIProviderError as e:
             out["errors"].append(str(e))
             continue
-        for item in result.get("items", []):
+        # Verification is an optional cross-check: a malformed response must degrade
+        # to "unverified", never fail the document and lose good Python extraction.
+        items_out = result.get("items") if isinstance(result, dict) else result
+        if not isinstance(items_out, list):
+            out["errors"].append(f"page {page_no}: unexpected verification payload")
+            continue
+        for item in items_out:
+            if not isinstance(item, dict):
+                continue
             metric = item.get("metric", "")
             db.add(VerificationResult(
                 case_id=doc.case_id, document_id=doc.id, page_number=page_no,
