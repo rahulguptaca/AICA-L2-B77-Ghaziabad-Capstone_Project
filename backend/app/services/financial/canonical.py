@@ -85,6 +85,10 @@ _LABEL_PATTERNS: list[tuple[str, str]] = [
     (r"^investments?$|non.current\s+investments?|current\s+investments?", "investments"),
     (r"inventor(y|ies)|stock.in.trade", "inventory"),
     (r"trade\s+receivables?|sundry\s+debtors|accounts?\s+receivable", "receivables"),
+    # opening/closing balances must precede the generic "cash" pattern below, which
+    # would otherwise swallow "Cash and cash equivalents at the beginning of the year"
+    (r"opening\s+(cash|balance)|cash.{0,40}at\s+the\s+beginning", "opening_cash"),
+    (r"closing\s+(cash|balance)|cash.{0,40}at\s+the\s+end", "closing_cash"),
     (r"cash\s+(and|&)\s+(cash\s+equivalents|bank)|cash\s+equivalents|bank\s+balances", "cash"),
     (r"other\s+current\s+assets|short.term\s+loans\s+and\s+advances", "other_current_assets"),
     (r"total\s+assets", "total_assets"),
@@ -93,18 +97,32 @@ _LABEL_PATTERNS: list[tuple[str, str]] = [
     (r"trade\s+payables?|sundry\s+creditors|accounts?\s+payable", "trade_payables"),
     (r"other\s+(current\s+)?liabilit|provisions", "other_liabilities"),
     (r"total\s+liabilit", "total_liabilities"),
-    (r"cash\s+(flow|generated).{0,20}operat|net\s+cash\s+from\s+operating|\bcfo\b", "cfo"),
-    (r"cash\s+(flow|used).{0,20}invest|net\s+cash\s+(used\s+in|from)\s+investing|\bcfi\b", "cfi"),
-    (r"cash\s+(flow|used).{0,20}financ|net\s+cash\s+(used\s+in|from)\s+financing|\bcff\b", "cff"),
-    (r"capital\s+expenditure|purchase\s+of\s+(fixed\s+assets|property)|\bcapex\b", "capex"),
-    (r"opening\s+cash|cash.{0,30}beginning", "opening_cash"),
-    (r"closing\s+cash|cash.{0,30}end\s+of", "closing_cash"),
+    # Net cash from/(used in) <activity> — the reported totals. The wording between
+    # "net cash" and the activity varies wildly ("from", "used in", "generated from",
+    # "from / (used in)"), so allow a short gap rather than enumerating variants.
+    # Deliberately does NOT match "Cash generated from operations", which is the
+    # PRE-TAX subtotal above "Income taxes paid" — CFO is the figure after tax.
+    (r"net\s+cash\b.{0,40}?operating\s+activit"
+     r"|cash\s+flows?\s+from\s+operating\s+activit|\bcfo\b", "cfo"),
+    (r"net\s+cash\b.{0,40}?investing\s+activit"
+     r"|cash\s+flows?\s+from\s+investing\s+activit|\bcfi\b", "cfi"),
+    (r"net\s+cash\b.{0,40}?financing\s+activit"
+     r"|cash\s+flows?\s+from\s+financing\s+activit|\bcff\b", "cff"),
 ]
+
+
+# Cash-flow *movement* lines. These name the same nouns as balance-sheet metrics
+# ("...in cash and cash equivalents", "...in short-term borrowings") but state the
+# change over the year, not the closing balance, so mapping them to a balance metric
+# silently substitutes a delta for a stock figure.
+_MOVEMENT_LINE = re.compile(r"^\W*(net\s+)?(increase|decrease)\b")
 
 
 def map_label_to_metric(label: str) -> str | None:
     """Map a raw statement label to a canonical metric name, or None."""
     t = re.sub(r"\s+", " ", label.strip().lower())
+    if _MOVEMENT_LINE.search(t):
+        return None
     for pattern, metric in _LABEL_PATTERNS:
         if re.search(pattern, t):
             return metric
