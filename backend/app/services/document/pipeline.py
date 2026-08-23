@@ -21,6 +21,7 @@ from ...models import (
 from ..ai.provider import AIProviderError
 from ..ai.service import get_provider, logged_call, get_ai_config
 from ..financial.canonical import STATEMENT_OF
+from ..financial.derive import derive_missing_metrics
 from ..financial.numbers import parse_amount
 from .extractor import (
     PdfExtraction, extract_pdf_items, extract_xlsx_items, inspect_pdf,
@@ -110,6 +111,10 @@ def process_document(db: Session, doc: Document) -> dict[str, Any]:
             db.commit()
 
         items_created = _upsert_line_items(db, doc, ext)
+        # EBITDA/EBIT/net worth are never printed as such on a Schedule III
+        # statement. Without them the valuation quietly substitutes defaults, so
+        # derive them from the components that did extract.
+        items_created += derive_missing_metrics(db, doc.case_id)
 
         verification = {"attempted": False, "verified": 0, "errors": []}
         if will_verify and rendered:
